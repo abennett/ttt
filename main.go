@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -24,8 +25,9 @@ var serveCmd = &ffcli.Command{
 }
 
 var rollCmd = &ffcli.Command{
-	Name: "roll",
-	Exec: roll,
+	Name:       "roll_remote",
+	ShortUsage: "roll_remote <ws://host:port> <username>",
+	Exec:       roll,
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -77,19 +79,32 @@ func roll(ctx context.Context, args []string) error {
 	}
 }
 
+var diceRollCmd = &ffcli.Command{
+	Name: "roll_local",
+	Exec: func(ctx context.Context, args []string) error {
+		if len(args) == 0 {
+			fmt.Println("a roll argument is required")
+			return nil
+		}
+		dr, err := pkg.ParseDiceRoll(args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s => %d\n", args[0], dr.Roll())
+		return nil
+	},
+}
+
 func main() {
 	root := &ffcli.Command{
-		Exec: func(ctx context.Context, args []string) error {
-			dr, err := pkg.ParseDiceRoll(args[0])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("%s => %d\n", args[0], dr.Roll())
-			return nil
-		},
+		ShortUsage: "ttt <subcommand>",
 		Subcommands: []*ffcli.Command{
+			diceRollCmd,
 			serveCmd,
 			rollCmd,
+		},
+		Exec: func(context.Context, []string) error {
+			return flag.ErrHelp
 		},
 	}
 
