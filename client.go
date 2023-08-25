@@ -20,6 +20,11 @@ var baseStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.NormalBorder()).
 	BorderForeground(lipgloss.Color("240"))
 
+var columns = []table.Column{
+	{Title: "User", Width: 10},
+	{Title: "Result", Width: 6},
+}
+
 type client struct {
 	cmd      tea.Cmd
 	endpoint string
@@ -42,8 +47,10 @@ func newClient(endpoint, user string) (client, error) {
 	}
 	updates := make(chan []pkg.RollResult, 1)
 	cmd := updateLoop(conn, updates)
+	table := table.New(table.WithColumns(columns))
 	return client{
 		cmd:      cmd,
+		table:    table,
 		endpoint: endpoint,
 		updates:  updates,
 	}, nil
@@ -62,25 +69,20 @@ func resultsToRows(rrs []pkg.RollResult) []table.Row {
 }
 
 func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	slog.Debug("updating model")
+	slog.Debug("updating model", "msg", msg)
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
 		slog.Debug("roll result")
-		columns := []table.Column{
-			{Title: "User", Width: 10},
-			{Title: "Result", Width: 6},
-		}
-		slog.Debug("updating table")
 		c.table = table.New(table.WithColumns(columns), table.WithRows(resultsToRows(msg)))
+		return c, c.tick()
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return c, tea.Quit
 		}
 	}
-	var cmd tea.Cmd
-	c.table, cmd = c.table.Update(msg)
-	return c, cmd
+	c.table, _ = c.table.Update(msg)
+	return c, nil
 }
 
 func (c client) View() string {
@@ -89,38 +91,42 @@ func (c client) View() string {
 }
 
 func (c client) tick() tea.Cmd {
-	slog.Debug("ticking")
 	return tea.Every(time.Second, func(time.Time) tea.Msg {
+		slog.Debug("ticking")
 		return <-c.updates
 	})
 }
 
 func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) tea.Cmd {
 	return func() tea.Msg {
-		slog.Debug("running update loop")
-		var currentVersion int
-		for {
-			var room pkg.Room
-			err := conn.ReadJSON(&room)
-			if err != nil {
-				slog.Error(err.Error())
-				return nil
+		go func() {
+			slog.Debug("running update loop")
+			var currentVersion int
+			for {
+				var room pkg.Room
+				err := conn.ReadJSON(&room)
+				if err != nil {
+					slog.Error(err.Error())
+					return
+				}
+				slog.Debug("message recieved")
+				if currentVersion == room.Version {
+					continue
+				}
+				currentVersion = room.Version
+				rolls := make([]pkg.RollResult, len(room.Rolls))
+				var idx int
+				for _, rr := range room.Rolls {
+					rolls[idx] = rr
+					idx++
+				}
+				slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
+					return cmp.Compare(b.Result, a.Result)
+				})
+				updates <- rolls
 			}
-			if currentVersion == room.Version {
-				continue
-			}
-			currentVersion = room.Version
-			rolls := make([]pkg.RollResult, len(room.Rolls))
-			var idx int
-			for _, rr := range room.Rolls {
-				rolls[idx] = rr
-				idx++
-			}
-			slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
-				return cmp.Compare(b.Result, a.Result)
-			})
-			updates <- rolls
-		}
+		}()
+		return nil
 	}
 }
 
