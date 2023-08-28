@@ -5,10 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,14 +17,24 @@ import (
 	"github.com/abennett/ttt/pkg"
 )
 
+var (
+	fs   = flag.NewFlagSet("ttt remote_roll", flag.ExitOnError)
+	port = fs.Int("port", 8080, "port number of server")
+
+	rootFS  = flag.NewFlagSet("ttt", flag.ExitOnError)
+	logFile = rootFS.String("logfile", "", "log to a file")
+)
+
 var serveCmd = &ffcli.Command{
-	Name: "serve",
-	Exec: serve,
+	Name:    "serve",
+	FlagSet: fs,
+	Exec:    serve,
 }
 
 var rollCmd = &ffcli.Command{
 	Name:       "roll_remote",
-	ShortUsage: "roll_remote <ws://host:port> <username>",
+	FlagSet:    fs,
+	ShortUsage: "roll_remote <host> <room> <username>",
 	Exec:       rollRemote,
 }
 
@@ -33,7 +43,7 @@ func serve(ctx context.Context, args []string) error {
 	r := chi.NewRouter()
 	r.Use(middleware.DefaultLogger)
 	r.Get("/{roomID}", server.ServeHTTP)
-	slog.Info("serving", "port", ":8080")
+	slog.Info("serving", "port", ":"+strconv.Itoa(*port))
 	return http.ListenAndServe(":8080", r)
 }
 
@@ -54,11 +64,9 @@ var diceRollCmd = &ffcli.Command{
 }
 
 func main() {
-	//h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
-	h := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
 	root := &ffcli.Command{
 		ShortUsage: "ttt <subcommand>",
+		FlagSet:    rootFS,
 		Subcommands: []*ffcli.Command{
 			diceRollCmd,
 			serveCmd,
@@ -69,8 +77,26 @@ func main() {
 		},
 	}
 
-	err := root.ParseAndRun(context.Background(), os.Args[1:])
+	err := root.Parse(os.Args[1:])
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	logOutput := io.Discard
+	if logFile != nil && *logFile != "" {
+		lf, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		logOutput = lf
+	}
+	h := slog.NewTextHandler(logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(h))
+
+	err = root.Run(context.Background())
+	if err != nil && err != flag.ErrHelp {
+		fmt.Println(err)
 	}
 }

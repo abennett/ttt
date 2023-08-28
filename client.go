@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -17,8 +18,7 @@ import (
 )
 
 var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("240"))
+	BorderStyle(lipgloss.NormalBorder())
 
 var columns = []table.Column{
 	{Title: "User", Width: 10},
@@ -32,12 +32,13 @@ type client struct {
 	updates  chan []pkg.RollResult
 }
 
-func newClient(endpoint, user string) (client, error) {
+func newClient(host, room, user string) (client, error) {
 	var c client
 	req := pkg.RollRequest{
 		User: user,
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	hostUrl := fmt.Sprintf("ws://%s:%d/%s", host, *port, room)
+	conn, _, err := websocket.DefaultDialer.Dial(hostUrl, nil)
 	if err != nil {
 		return c, err
 	}
@@ -47,11 +48,21 @@ func newClient(endpoint, user string) (client, error) {
 	}
 	updates := make(chan []pkg.RollResult, 1)
 	cmd := updateLoop(conn, updates)
-	table := table.New(table.WithColumns(columns))
+	table := table.New(
+		table.WithColumns(columns),
+		table.WithHeight(0),
+		table.WithFocused(false),
+		table.WithStyles(
+			table.Styles{
+				Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
+				Cell:     lipgloss.NewStyle().Padding(0, 1),
+				Selected: lipgloss.NewStyle().Padding(0, 1),
+			}),
+	)
 	return client{
 		cmd:      cmd,
 		table:    table,
-		endpoint: endpoint,
+		endpoint: host,
 		updates:  updates,
 	}, nil
 }
@@ -73,7 +84,8 @@ func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
 		slog.Debug("roll result")
-		c.table = table.New(table.WithColumns(columns), table.WithRows(resultsToRows(msg)))
+		c.table.SetHeight(len(msg))
+		c.table.SetRows(resultsToRows(msg))
 		return c, c.tick()
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -131,7 +143,7 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) tea.Cmd {
 }
 
 func rollRemote(ctx context.Context, args []string) error {
-	c, err := newClient(args[0], args[1])
+	c, err := newClient(args[0], args[1], args[2])
 	if err != nil {
 		return err
 	}
