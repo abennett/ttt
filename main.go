@@ -45,8 +45,9 @@ func serve(ctx context.Context, args []string) error {
 	r := chi.NewRouter()
 	r.Use(middleware.DefaultLogger)
 	r.Get("/{roomName}", server.ServeHTTP)
-	slog.Info("serving", "port", ":"+strconv.Itoa(*port))
-	return http.ListenAndServe(":8080", r)
+	port := ":" + strconv.Itoa(*port)
+	slog.Info("serving", "port", port)
+	return http.ListenAndServe(port, r)
 }
 
 var diceRollCmd = &ffcli.Command{
