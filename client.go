@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"slices"
 	"strconv"
 	"time"
@@ -38,8 +40,10 @@ func newClient(host, room, user string) (client, error) {
 		User: user,
 	}
 	hostUrl := fmt.Sprintf("ws://%s:%d/%s", host, *port, room)
-	conn, _, err := websocket.DefaultDialer.Dial(hostUrl, nil)
+	slog.Debug("using endpoint", "endpoint", hostUrl)
+	conn, resp, err := websocket.DefaultDialer.Dial(hostUrl, nil)
 	if err != nil {
+		io.Copy(os.Stderr, resp.Body)
 		return c, err
 	}
 	err = conn.WriteJSON(req)

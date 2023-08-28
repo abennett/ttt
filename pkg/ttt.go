@@ -38,9 +38,19 @@ func NewServer() *Server {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	roomName := chi.URLParam(r, "roomName")
+	if roomName == "" {
+		http.Error(w, "room name is required", http.StatusBadRequest)
+		return
+	}
+	slog.Info("serving request", "roomName", roomName)
 	_, ok := s.Rooms[roomName]
 	if !ok {
 		s.NewRoom(roomName)
+		defer func() {
+			s.rw.Lock()
+			delete(s.Rooms, roomName)
+			s.rw.Unlock()
+		}()
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -168,15 +178,15 @@ func (s *Server) NewRoom(name string) error {
 	return nil
 }
 
-func (s *Server) GetRoom(roomName string) (Room, error) {
+func (s *Server) GetRoom(roomName string) (*Room, error) {
 	room := new(Room)
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	room, ok := s.Rooms[roomName]
 	if !ok {
-		return *room, ErrRoomNotExists
+		return room, ErrRoomNotExists
 	}
-	return *room, nil
+	return room, nil
 }
 
 func (s *Server) Roll(roomName, user string) error {

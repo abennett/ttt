@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,11 +17,11 @@ import (
 )
 
 var (
-	fs   = flag.NewFlagSet("ttt remote_roll", flag.ExitOnError)
+	fs   = flag.NewFlagSet("ttt", flag.ExitOnError)
 	port = fs.Int("port", 8080, "port number of server")
 
-	rootFS  = flag.NewFlagSet("ttt", flag.ExitOnError)
-	logFile = rootFS.String("logfile", "", "log to a file")
+	clientFS = flag.NewFlagSet("ttt roll", flag.ExitOnError)
+	logFile  = clientFS.String("logfile", "", "log to a file")
 )
 
 var serveCmd = &ffcli.Command{
@@ -32,17 +31,20 @@ var serveCmd = &ffcli.Command{
 }
 
 var rollCmd = &ffcli.Command{
-	Name:       "roll_remote",
+	Name:       "roll",
 	FlagSet:    fs,
-	ShortUsage: "roll_remote <host> <room> <username>",
+	ShortUsage: "roll <host> <room> <username>",
 	Exec:       rollRemote,
 }
 
 func serve(ctx context.Context, args []string) error {
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(h))
+
 	server := pkg.NewServer()
 	r := chi.NewRouter()
 	r.Use(middleware.DefaultLogger)
-	r.Get("/{roomID}", server.ServeHTTP)
+	r.Get("/{roomName}", server.ServeHTTP)
 	slog.Info("serving", "port", ":"+strconv.Itoa(*port))
 	return http.ListenAndServe(":8080", r)
 }
@@ -66,7 +68,6 @@ var diceRollCmd = &ffcli.Command{
 func main() {
 	root := &ffcli.Command{
 		ShortUsage: "ttt <subcommand>",
-		FlagSet:    rootFS,
 		Subcommands: []*ffcli.Command{
 			diceRollCmd,
 			serveCmd,
@@ -82,18 +83,6 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
-	logOutput := io.Discard
-	if logFile != nil && *logFile != "" {
-		lf, err := os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		logOutput = lf
-	}
-	h := slog.NewTextHandler(logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
 
 	err = root.Run(context.Background())
 	if err != nil && err != flag.ErrHelp {
