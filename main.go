@@ -33,7 +33,7 @@ var serveCmd = &ffcli.Command{
 var rollCmd = &ffcli.Command{
 	Name:       "roll",
 	FlagSet:    fs,
-	ShortUsage: "roll <host> <room> <username>",
+	ShortUsage: "roll <host_with_protocol> <room> <username>",
 	Exec:       rollRemote,
 }
 
