@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -61,16 +62,45 @@ func connectLoop(wsUrl string) (*websocket.Conn, error) {
 	return nil, ErrTooManyRedirects
 }
 
+func hostUrl(endpoint, room string) (string, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	var scheme string
+	switch parsed.Scheme {
+	case "https", "wss":
+		scheme = "wss"
+	case "http", "ws":
+		scheme = "ws"
+	default:
+		return "", fmt.Errorf("%s is not a valid protocol", parsed.Scheme)
+	}
+	hostUrl := fmt.Sprintf("%s://%s:%d/%s", scheme, parsed.Host, *port, room)
+	return hostUrl, nil
+}
+
 func newClient(host, room, user string) (client, error) {
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
 	var c client
+	logWriter := io.Discard
+	if logFile != nil && *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_RDONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return c, err
+		}
+		logWriter = f
+	}
+	h := slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(h))
 	req := pkg.RollRequest{
 		User: user,
 	}
-	hostUrl := fmt.Sprintf("wss://%s:%d/%s", host, *port, room)
-	slog.Debug("using endpoint", "endpoint", hostUrl)
-	conn, err := connectLoop(hostUrl)
+	endpoint, err := hostUrl(host, room)
+	if err != nil {
+		return c, err
+	}
+	slog.Debug("using endpoint", "endpoint", endpoint)
+	conn, err := connectLoop(endpoint)
 	if err != nil {
 		return c, err
 	}
