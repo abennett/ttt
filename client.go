@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"github.com/abennett/ttt/pkg"
 )
 
+var ErrTooManyRedirects = errors.New("too many redirects")
+
 var baseStyle = lipgloss.NewStyle().
 	BorderStyle(lipgloss.NormalBorder())
 
@@ -34,21 +37,46 @@ type client struct {
 	updates  chan []pkg.RollResult
 }
 
+func connectLoop(wsUrl string) (*websocket.Conn, error) {
+	for x := 0; x < 3; x++ {
+		slog.Debug("attempting connection", "url", wsUrl)
+		conn, resp, err := websocket.DefaultDialer.Dial(wsUrl, nil)
+		slog.Debug("connection attempted",
+			"resp", resp,
+			"error", err)
+		if err != nil {
+			if resp != nil {
+				io.Copy(os.Stderr, resp.Body)
+			}
+			return nil, err
+		}
+		if resp != nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			wsUrl = resp.Header.Get("Location")
+			slog.Debug("redirecting", "location", wsUrl)
+			continue
+		}
+		return conn, nil
+	}
+
+	return nil, ErrTooManyRedirects
+}
+
 func newClient(host, room, user string) (client, error) {
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	slog.SetDefault(slog.New(h))
 	var c client
 	req := pkg.RollRequest{
 		User: user,
 	}
-	hostUrl := fmt.Sprintf("ws://%s:%d/%s", host, *port, room)
+	hostUrl := fmt.Sprintf("wss://%s:%d/%s", host, *port, room)
 	slog.Debug("using endpoint", "endpoint", hostUrl)
-	conn, resp, err := websocket.DefaultDialer.Dial(hostUrl, nil)
+	conn, err := connectLoop(hostUrl)
 	if err != nil {
-		io.Copy(os.Stderr, resp.Body)
 		return c, err
 	}
 	err = conn.WriteJSON(req)
 	if err != nil {
-		return c, err
+		return c, fmt.Errorf("unable to write json: %w", err)
 	}
 	updates := make(chan []pkg.RollResult, 1)
 	cmd := updateLoop(conn, updates)
