@@ -24,7 +24,8 @@ import (
 var ErrTooManyRedirects = errors.New("too many redirects")
 
 var baseStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder())
+	BorderStyle(lipgloss.NormalBorder()).
+	Align(lipgloss.Center)
 
 var columns = []table.Column{
 	{Title: "User", Width: 10},
@@ -110,20 +111,24 @@ func newClient(host, room, user string) (client, error) {
 	}
 	updates := make(chan []pkg.RollResult, 1)
 	cmd := updateLoop(conn, updates)
-	table := table.New(
+	t := table.New(
 		table.WithColumns(columns),
 		table.WithHeight(0),
 		table.WithFocused(false),
-		table.WithStyles(
-			table.Styles{
-				Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
-				Cell:     lipgloss.NewStyle().Padding(0, 1),
-				Selected: lipgloss.NewStyle().Padding(0, 1),
-			}),
 	)
+	s := table.DefaultStyles()
+	s.Header = s.Header.Foreground(lipgloss.Color("#01c5d1"))
+	s.Selected = s.Selected.Foreground(lipgloss.NoColor{}).Bold(false)
+	t.SetStyles(s)
+	//table.WithStyles(
+	//	table.Styles{
+	//		Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
+	//		Cell:     lipgloss.NewStyle().Padding(0, 1),
+	//		Selected: lipgloss.NewStyle().Padding(0, 1),
+	//	}),
 	return client{
 		cmd:      cmd,
-		table:    table,
+		table:    t,
 		endpoint: host,
 		updates:  updates,
 	}, nil
