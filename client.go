@@ -85,7 +85,7 @@ func newClient(host, room, user string) (client, error) {
 	var c client
 	logWriter := io.Discard
 	if logFile != nil && *logFile != "" {
-		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_RDONLY|os.O_APPEND, 0644)
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 		if err != nil {
 			return c, err
 		}
