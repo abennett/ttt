@@ -24,17 +24,23 @@ var (
 	logFile  = clientFS.String("logfile", "", "log to a file")
 )
 
-var serveCmd = &ffcli.Command{
-	Name:    "serve",
-	FlagSet: fs,
-	Exec:    serve,
-}
+var (
+	serveCmd = &ffcli.Command{
+		Name:    "serve",
+		FlagSet: fs,
+		Exec:    serve,
+	}
 
-var rollCmd = &ffcli.Command{
-	Name:       "roll",
-	FlagSet:    fs,
-	ShortUsage: "roll <host_with_protocol> <room> <username>",
-	Exec:       rollRemote,
+	rollCmd = &ffcli.Command{
+		Name:       "roll",
+		FlagSet:    fs,
+		ShortUsage: "roll <host_with_protocol> <room> <username>",
+		Exec:       rollRemote,
+	}
+)
+
+func health(w http.ResponseWriter, r *http.Request) {
+	_, _ = w.Write([]byte("ok"))
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -45,6 +51,7 @@ func serve(ctx context.Context, args []string) error {
 	r := chi.NewRouter()
 	r.Use(middleware.DefaultLogger)
 	r.Get("/{roomName}", server.ServeHTTP)
+	r.Get("/health", health)
 	port := ":" + strconv.Itoa(*port)
 	slog.Info("serving", "port", port)
 	return http.ListenAndServe(port, r)
