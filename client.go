@@ -37,6 +37,7 @@ type client struct {
 	endpoint string
 	table    table.Model
 	updates  chan []pkg.RollResult
+	stopFunc func()
 }
 
 func connectLoop(wsUrl string) (*websocket.Conn, error) {
@@ -81,7 +82,8 @@ func hostUrl(endpoint, room string) (string, error) {
 	return hostUrl, nil
 }
 
-func newClient(host, room, user string) (client, error) {
+func newClient(ctx context.Context, host, room, user string) (client, error) {
+	ctx, stop := context.WithCancel(ctx)
 	var c client
 	logWriter := io.Discard
 	if logFile != nil && *logFile != "" {
@@ -109,6 +111,10 @@ func newClient(host, room, user string) (client, error) {
 	if err != nil {
 		return c, fmt.Errorf("unable to write json: %w", err)
 	}
+	stopFunc := func() {
+		stop()
+		conn.Close()
+	}
 	updates := make(chan []pkg.RollResult, 1)
 	cmd := updateLoop(conn, updates)
 	t := table.New(
@@ -131,6 +137,7 @@ func newClient(host, room, user string) (client, error) {
 		table:    t,
 		endpoint: host,
 		updates:  updates,
+		stopFunc: stopFunc,
 	}, nil
 }
 
@@ -157,6 +164,7 @@ func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			c.stopFunc()
 			return c, tea.Quit
 		}
 	}
@@ -210,7 +218,7 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) tea.Cmd {
 }
 
 func rollRemote(ctx context.Context, args []string) error {
-	c, err := newClient(args[0], args[1], args[2])
+	c, err := newClient(ctx, args[0], args[1], args[2])
 	if err != nil {
 		return err
 	}
