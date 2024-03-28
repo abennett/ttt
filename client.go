@@ -48,7 +48,7 @@ func connectLoop(wsUrl string) (*websocket.Conn, error) {
 			"error", err)
 		if err != nil {
 			if resp != nil {
-				io.Copy(os.Stderr, resp.Body)
+				_, _ = io.Copy(os.Stderr, resp.Body)
 			}
 			return nil, err
 		}
