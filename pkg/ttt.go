@@ -46,7 +46,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	slog.Info("serving request", "roomName", roomName)
 	_, ok := s.Rooms[roomName]
 	if !ok {
-		s.NewRoom(roomName)
+		err := s.NewRoom(roomName)
+		if err != nil {
+			slog.Error("unable to create new room", "room_name", roomName, "error", err)
+			http.Error(w, "unable to create new room", http.StatusInternalServerError)
+			return
+		}
 	}
 	defer func() {
 		err := s.Disconnect(roomName)
@@ -183,7 +188,6 @@ func (s *Server) NewRoom(name string) error {
 }
 
 func (s *Server) GetRoom(roomName string) (*Room, error) {
-	room := new(Room)
 	s.rw.RLock()
 	defer s.rw.RUnlock()
 	room, ok := s.Rooms[roomName]
