@@ -26,7 +26,8 @@ var (
 type Server struct {
 	rw       sync.RWMutex
 	upgrader websocket.Upgrader
-	Rooms    map[string]*Room
+
+	Rooms map[string]*Room
 }
 
 func NewServer() *Server {
@@ -46,12 +47,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, ok := s.Rooms[roomName]
 	if !ok {
 		s.NewRoom(roomName)
-		defer func() {
-			s.rw.Lock()
-			delete(s.Rooms, roomName)
-			s.rw.Unlock()
-		}()
 	}
+	defer func() {
+		err := s.Disconnect(roomName)
+		if err != nil {
+			slog.Error("failed to run disconnect on room", "error", err)
+		}
+	}()
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error(err.Error())
@@ -65,8 +67,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Error(err.Error())
 		return
 	}
-	slog.Info("message received",
-		"message", rollRequest)
+	slog.Info("message received", "message", rollRequest)
 	err = s.Roll(roomName, rollRequest.User)
 	if err != nil {
 		slog.Error(err.Error())
@@ -90,6 +91,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type Room struct {
+	// users must be mutated under a lock
+	users int
+
 	Version int                   `json:"version"`
 	Name    string                `json:"name"`
 	Dice    string                `json:"required_roll"`
@@ -189,6 +193,24 @@ func (s *Server) GetRoom(roomName string) (*Room, error) {
 	return room, nil
 }
 
+func (s *Server) Disconnect(roomName string) error {
+	s.rw.Lock()
+	defer s.rw.Unlock()
+
+	room, ok := s.Rooms[roomName]
+	if !ok {
+		return ErrRoomNotExists
+	}
+
+	room.users--
+	if room.users <= 0 {
+		delete(s.Rooms, roomName)
+		slog.Info("deleted room", "room_name", roomName)
+	}
+
+	return nil
+}
+
 func (s *Server) Roll(roomName, user string) error {
 	s.rw.Lock()
 	defer s.rw.Unlock()
@@ -196,6 +218,7 @@ func (s *Server) Roll(roomName, user string) error {
 	if !ok {
 		return ErrRoomNotExists
 	}
+	room.users++
 	dice, err := ParseDiceRoll(room.Dice)
 	if err != nil {
 		return err
