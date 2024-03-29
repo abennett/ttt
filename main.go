@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	fs   = flag.NewFlagSet("ttt", flag.ExitOnError)
-	port = fs.Int("port", 8080, "port number of server")
+	serverFS = flag.NewFlagSet("ttt", flag.ExitOnError)
+	port     = serverFS.Int("port", 8080, "port number of server")
 
 	clientFS = flag.NewFlagSet("ttt roll", flag.ExitOnError)
 	logFile  = clientFS.String("logfile", "", "log to a file")
@@ -27,13 +27,13 @@ var (
 var (
 	serveCmd = &ffcli.Command{
 		Name:    "serve",
-		FlagSet: fs,
+		FlagSet: serverFS,
 		Exec:    serve,
 	}
 
 	rollCmd = &ffcli.Command{
 		Name:       "roll",
-		FlagSet:    fs,
+		FlagSet:    clientFS,
 		ShortUsage: "roll <host_with_protocol> <room> <username>",
 		Exec:       rollRemote,
 	}

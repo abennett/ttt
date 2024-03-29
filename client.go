@@ -11,7 +11,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,10 +32,11 @@ var columns = []table.Column{
 }
 
 type client struct {
-	cmd      tea.Cmd
+	user     string
 	endpoint string
 	table    table.Model
 	updates  chan []pkg.RollResult
+	err      error
 }
 
 func connectLoop(wsUrl string) (*websocket.Conn, error) {
@@ -77,40 +77,39 @@ func hostUrl(endpoint, room string) (string, error) {
 	default:
 		return "", fmt.Errorf("%s is not a valid protocol", parsed.Scheme)
 	}
-	hostUrl := fmt.Sprintf("%s://%s:%d/%s", scheme, parsed.Host, *port, room)
-	return hostUrl, nil
+	parsed.Scheme = scheme
+	parsed.Path = room
+	return parsed.String(), nil
 }
 
-func newClient(host, room, user string) (client, error) {
-	var c client
+func setupLogger(user string, logFile *string) error {
 	logWriter := io.Discard
 	if logFile != nil && *logFile != "" {
-		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_RDONLY|os.O_APPEND, 0644)
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 		if err != nil {
-			return c, err
+			return err
 		}
 		logWriter = f
 	}
 	h := slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
-	slog.SetDefault(slog.New(h))
-	req := pkg.RollRequest{
-		User: user,
+	logger := slog.New(h)
+	logger = logger.With("user", user)
+	slog.SetDefault(logger)
+	return nil
+}
+
+func newClient(host, room, user string) (*client, error) {
+	err := setupLogger(user, logFile)
+	if err != nil {
+		return nil, fmt.Errorf("unable to setup log file: %w", err)
 	}
+
 	endpoint, err := hostUrl(host, room)
 	if err != nil {
-		return c, err
+		return nil, err
 	}
 	slog.Debug("using endpoint", "endpoint", endpoint)
-	conn, err := connectLoop(endpoint)
-	if err != nil {
-		return c, err
-	}
-	err = conn.WriteJSON(req)
-	if err != nil {
-		return c, fmt.Errorf("unable to write json: %w", err)
-	}
-	updates := make(chan []pkg.RollResult, 1)
-	cmd := updateLoop(conn, updates)
+
 	t := table.New(
 		table.WithColumns(columns),
 		table.WithHeight(0),
@@ -120,22 +119,37 @@ func newClient(host, room, user string) (client, error) {
 	s.Header = s.Header.Foreground(lipgloss.Color("#01c5d1"))
 	s.Selected = s.Selected.Foreground(lipgloss.NoColor{}).Bold(false)
 	t.SetStyles(s)
-	//table.WithStyles(
-	//	table.Styles{
-	//		Header:   lipgloss.NewStyle().Bold(true).Padding(0, 1),
-	//		Cell:     lipgloss.NewStyle().Padding(0, 1),
-	//		Selected: lipgloss.NewStyle().Padding(0, 1),
-	//	}),
-	return client{
-		cmd:      cmd,
+	return &client{
+		user:     user,
 		table:    t,
-		endpoint: host,
-		updates:  updates,
+		endpoint: endpoint,
+		updates:  make(chan []pkg.RollResult),
 	}, nil
 }
 
+func errorCmd(err error) tea.Cmd {
+	return func() tea.Msg {
+		return err
+	}
+}
+
 func (c client) Init() tea.Cmd {
-	return tea.Batch(c.cmd, c.tick())
+	slog.Debug("running Init")
+	conn, err := connectLoop(c.endpoint)
+	if err != nil {
+		return errorCmd(err)
+	}
+
+	req := pkg.RollRequest{
+		User: c.user,
+	}
+	err = conn.WriteJSON(req)
+	if err != nil {
+		return errorCmd(fmt.Errorf("unable to write json: %w", err))
+	}
+	updateLoop(conn, c.updates)
+
+	return c.readUpdate()
 }
 
 func resultsToRows(rrs []pkg.RollResult) []table.Row {
@@ -146,67 +160,77 @@ func resultsToRows(rrs []pkg.RollResult) []table.Row {
 	return rows
 }
 
-func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	slog.Debug("updating model", "msg", msg)
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
 		slog.Debug("roll result")
 		c.table.SetHeight(len(msg))
 		c.table.SetRows(resultsToRows(msg))
-		return c, c.tick()
+		return c, c.readUpdate()
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return c, tea.Quit
 		}
+	case error:
+		slog.Error("exiting for error", "error", msg)
+		c.err = msg
+		return c, tea.Quit
 	}
-	c.table, _ = c.table.Update(msg)
+	slog.Debug("no update")
 	return c, nil
 }
 
 func (c client) View() string {
 	slog.Debug("rerendering view")
+	if c.err != nil {
+		return fmt.Sprintln(c.err)
+	}
 	return baseStyle.Render(c.table.View()) + "\n"
 }
 
-func (c client) tick() tea.Cmd {
-	return tea.Every(time.Second, func(time.Time) tea.Msg {
-		slog.Debug("ticking")
-		return <-c.updates
-	})
+func (c client) readUpdate() tea.Cmd {
+	slog.Debug("reading update")
+	return func() tea.Msg {
+		slog.Debug("reading from channel")
+		update := <-c.updates
+		slog.Debug("read from channel")
+		return update
+	}
 }
 
-func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) tea.Cmd {
-	return func() tea.Msg {
-		go func() {
-			slog.Debug("running update loop")
-			var currentVersion int
-			for {
-				var room pkg.Room
-				err := conn.ReadJSON(&room)
-				if err != nil {
-					slog.Error(err.Error())
-					return
-				}
-				slog.Debug("message recieved")
-				if currentVersion == room.Version {
-					continue
-				}
-				currentVersion = room.Version
-				rolls := make([]pkg.RollResult, len(room.Rolls))
-				var idx int
-				for _, rr := range room.Rolls {
-					rolls[idx] = rr
-					idx++
-				}
-				slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
-					return cmp.Compare(b.Result, a.Result)
-				})
-				updates <- rolls
+func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
+	go func() {
+		slog.Debug("running update loop")
+		var currentVersion int
+		for {
+			var room pkg.Room
+			err := conn.ReadJSON(&room)
+			if err != nil {
+				slog.Error(err.Error())
+				return
 			}
-		}()
-		return nil
-	}
+			slog.Debug("message recieved", "version", room.Version)
+			if currentVersion == room.Version {
+				slog.Debug("version hasn't changed, continuing")
+				continue
+			}
+			slog.Debug("new version")
+			rolls := make([]pkg.RollResult, len(room.Rolls))
+			var idx int
+			for _, rr := range room.Rolls {
+				rolls[idx] = rr
+				idx++
+			}
+			slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
+				return cmp.Compare(b.Result, a.Result)
+			})
+			slog.Debug("pushing rolls on channel")
+			updates <- rolls
+			currentVersion = room.Version
+		}
+	}()
 }
 
 func rollRemote(ctx context.Context, args []string) error {
