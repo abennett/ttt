@@ -76,8 +76,9 @@ func hostUrl(endpoint, room string) (string, error) {
 	default:
 		return "", fmt.Errorf("%s is not a valid protocol", parsed.Scheme)
 	}
-	hostUrl := fmt.Sprintf("%s://%s:%d/%s", scheme, parsed.Host, *port, room)
-	return hostUrl, nil
+	parsed.Scheme = scheme
+	parsed.Path = room
+	return parsed.String(), nil
 }
 
 func setupLogger(user string, logFile *string) error {
