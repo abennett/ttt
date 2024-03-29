@@ -36,6 +36,7 @@ type client struct {
 	endpoint string
 	table    table.Model
 	updates  chan []pkg.RollResult
+	err      error
 }
 
 func connectLoop(wsUrl string) (*websocket.Conn, error) {
@@ -159,7 +160,7 @@ func resultsToRows(rrs []pkg.RollResult) []table.Row {
 	return rows
 }
 
-func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	slog.Debug("updating model", "msg", msg)
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
@@ -174,6 +175,7 @@ func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case error:
 		slog.Error("exiting for error", "error", msg)
+		c.err = msg
 		return c, tea.Quit
 	}
 	slog.Debug("no update")
@@ -182,6 +184,9 @@ func (c client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (c client) View() string {
 	slog.Debug("rerendering view")
+	if c.err != nil {
+		return fmt.Sprintln(c.err)
+	}
 	return baseStyle.Render(c.table.View()) + "\n"
 }
 
