@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,13 +19,17 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	PING_INTERVAL = time.Second
+)
+
 var (
 	ErrRoomExists    = errors.New("room exists")
 	ErrRoomNotExists = errors.New("room does not exist")
 )
 
 type Server struct {
-	rw       sync.RWMutex
+	rw       *sync.RWMutex
 	upgrader websocket.Upgrader
 
 	Rooms map[string]*Room
@@ -32,7 +37,7 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		rw:    sync.RWMutex{},
+		rw:    &sync.RWMutex{},
 		Rooms: map[string]*Room{},
 	}
 }
@@ -44,21 +49,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("serving request", "roomName", roomName)
-	_, ok := s.Rooms[roomName]
+	var err error
+	room, ok := s.Rooms[roomName]
 	if !ok {
-		err := s.NewRoom(roomName)
+		room, err = s.NewRoom(roomName)
 		if err != nil {
 			slog.Error("unable to create new room", "room_name", roomName, "error", err)
 			http.Error(w, "unable to create new room", http.StatusInternalServerError)
 			return
 		}
 	}
-	defer func() {
-		err := s.Disconnect(roomName)
-		if err != nil {
-			slog.Error("failed to run disconnect on room", "error", err)
-		}
-	}()
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error(err.Error())
@@ -73,36 +73,113 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("message received", "message", rollRequest)
-	err = s.Roll(roomName, rollRequest.User)
-	if err != nil {
-		slog.Error(err.Error())
-		return
+	<-room.NewSession(r.Context(), rollRequest.User, conn)
+	slog.Info("session ended", "user", rollRequest.User)
+
+	room.mu.Lock()
+	if len(room.userSessions) == 0 {
+		s.rw.Lock()
+		delete(s.Rooms, roomName)
+		s.rw.Unlock()
+		slog.Info("closed room", "room", roomName)
 	}
-	for {
-		// update room status
-		room, err := s.GetRoom(roomName)
-		if err != nil {
-			slog.Error(err.Error())
-			return
-		}
-		b, _ := json.Marshal(room)
-		err = conn.WriteMessage(websocket.TextMessage, b)
-		if err != nil {
-			slog.Error(err.Error())
-			return
-		}
-		time.Sleep(time.Second)
-	}
+	room.mu.Unlock()
 }
 
 type Room struct {
-	// users must be mutated under a lock
-	users int
+	mu           sync.Mutex
+	userSessions map[string]userSession
 
 	Version int                   `json:"version"`
 	Name    string                `json:"name"`
 	Dice    string                `json:"required_roll"`
 	Rolls   map[string]RollResult `json:"rolls"`
+}
+
+func (r *Room) NewSession(ctx context.Context, name string, conn *websocket.Conn) <-chan struct{} {
+	doneCh := make(chan struct{}, 1)
+	writeCh := make(chan []byte, 1)
+	session := userSession{
+		name:    name,
+		writeCh: writeCh,
+	}
+	r.mu.Lock()
+	r.userSessions[name] = session
+	r.mu.Unlock()
+	err := r.Roll(name)
+	if err != nil {
+		slog.Error(err.Error())
+		return nil
+	}
+
+	go func() {
+		ticker := time.NewTicker(PING_INTERVAL)
+		defer func() {
+			doneCh <- struct{}{}
+
+			r.mu.Lock()
+			delete(r.userSessions, name)
+			r.mu.Unlock()
+
+			ticker.Stop()
+			<-ticker.C
+		}()
+	EXIT:
+		for {
+			select {
+			case <-ctx.Done():
+				break EXIT
+			case b := <-writeCh:
+				err := conn.WriteMessage(websocket.TextMessage, b)
+				if err != nil {
+					slog.Error(err.Error())
+					return
+				}
+			case <-ticker.C:
+				err := conn.WriteMessage(websocket.PingMessage, []byte{})
+				if err != nil {
+					slog.Error("ping failed", "error", err)
+					return
+				}
+			}
+		}
+	}()
+	return doneCh
+}
+
+func (r *Room) RemoveSession(name string) {
+	r.mu.Lock()
+	delete(r.userSessions, name)
+	r.mu.Unlock()
+}
+
+func (r *Room) Roll(user string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dice, err := ParseDiceRoll(r.Dice)
+	if err != nil {
+		return err
+	}
+	rollResult := RollResult{
+		User:   user,
+		Result: dice.Roll(),
+	}
+	r.Rolls[user] = rollResult
+	r.Version++
+	b, err := json.Marshal(r)
+	if err != nil {
+		slog.Error("failed marshalling room", "error", err)
+		return err
+	}
+	for _, us := range r.userSessions {
+		us.writeCh <- b
+	}
+	return nil
+}
+
+type userSession struct {
+	name    string
+	writeCh chan<- []byte
 }
 
 type RollRequest struct {
@@ -171,20 +248,21 @@ func (dr DiceRoll) Roll() int {
 	return result + dr.Modifier
 }
 
-func (s *Server) NewRoom(name string) error {
+func (s *Server) NewRoom(name string) (*Room, error) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
 	_, ok := s.Rooms[name]
 	if ok {
-		return ErrRoomExists
+		return nil, ErrRoomExists
 	}
 	s.Rooms[name] = &Room{
-		Version: 0,
-		Dice:    "1d20",
-		Name:    name,
-		Rolls:   map[string]RollResult{},
+		userSessions: make(map[string]userSession),
+		Version:      0,
+		Dice:         "1d20",
+		Name:         name,
+		Rolls:        map[string]RollResult{},
 	}
-	return nil
+	return s.Rooms[name], nil
 }
 
 func (s *Server) GetRoom(roomName string) (*Room, error) {
@@ -195,43 +273,4 @@ func (s *Server) GetRoom(roomName string) (*Room, error) {
 		return room, ErrRoomNotExists
 	}
 	return room, nil
-}
-
-func (s *Server) Disconnect(roomName string) error {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-
-	room, ok := s.Rooms[roomName]
-	if !ok {
-		return ErrRoomNotExists
-	}
-
-	room.users--
-	if room.users <= 0 {
-		delete(s.Rooms, roomName)
-		slog.Info("deleted room", "room_name", roomName)
-	}
-
-	return nil
-}
-
-func (s *Server) Roll(roomName, user string) error {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	room, ok := s.Rooms[roomName]
-	if !ok {
-		return ErrRoomNotExists
-	}
-	room.users++
-	dice, err := ParseDiceRoll(room.Dice)
-	if err != nil {
-		return err
-	}
-	rollResult := RollResult{
-		User:   user,
-		Result: dice.Roll(),
-	}
-	room.Rolls[user] = rollResult
-	room.Version++
-	return nil
 }

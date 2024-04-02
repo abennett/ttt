@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +37,7 @@ type client struct {
 	endpoint string
 	table    table.Model
 	updates  chan []pkg.RollResult
+	done     chan struct{}
 	err      error
 }
 
@@ -124,6 +126,7 @@ func newClient(host, room, user string) (*client, error) {
 		table:    t,
 		endpoint: endpoint,
 		updates:  make(chan []pkg.RollResult),
+		done:     make(chan struct{}),
 	}, nil
 }
 
@@ -147,7 +150,9 @@ func (c client) Init() tea.Cmd {
 	if err != nil {
 		return errorCmd(fmt.Errorf("unable to write json: %w", err))
 	}
-	updateLoop(conn, c.updates)
+
+	go waitClose(conn, c.done)
+	go updateLoop(conn, c.updates)
 
 	return c.readUpdate()
 }
@@ -171,6 +176,7 @@ func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
+			c.done <- struct{}{}
 			return c, tea.Quit
 		}
 	case error:
@@ -200,37 +206,48 @@ func (c client) readUpdate() tea.Cmd {
 	}
 }
 
+func waitClose(conn *websocket.Conn, done <-chan struct{}) {
+	<-done
+	slog.Debug("closing connection")
+	err := conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(time.Second),
+	)
+	if err != nil {
+		slog.Error("close control message failed", "error", err)
+	}
+}
+
 func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
-	go func() {
-		slog.Debug("running update loop")
-		var currentVersion int
-		for {
-			var room pkg.Room
-			err := conn.ReadJSON(&room)
-			if err != nil {
-				slog.Error(err.Error())
-				return
-			}
-			slog.Debug("message recieved", "version", room.Version)
-			if currentVersion == room.Version {
-				slog.Debug("version hasn't changed, continuing")
-				continue
-			}
-			slog.Debug("new version")
-			rolls := make([]pkg.RollResult, len(room.Rolls))
-			var idx int
-			for _, rr := range room.Rolls {
-				rolls[idx] = rr
-				idx++
-			}
-			slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
-				return cmp.Compare(b.Result, a.Result)
-			})
-			slog.Debug("pushing rolls on channel")
-			updates <- rolls
-			currentVersion = room.Version
+	slog.Debug("running update loop")
+	var currentVersion int
+	for {
+		var room pkg.Room
+		err := conn.ReadJSON(&room)
+		if err != nil {
+			slog.Error(err.Error())
+			return
 		}
-	}()
+		slog.Debug("message recieved", "version", room.Version)
+		if currentVersion == room.Version {
+			slog.Debug("version hasn't changed, continuing")
+			continue
+		}
+		slog.Debug("new version")
+		rolls := make([]pkg.RollResult, len(room.Rolls))
+		var idx int
+		for _, rr := range room.Rolls {
+			rolls[idx] = rr
+			idx++
+		}
+		slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
+			return cmp.Compare(b.Result, a.Result)
+		})
+		slog.Debug("pushing rolls on channel")
+		updates <- rolls
+		currentVersion = room.Version
+	}
 }
 
 func rollRemote(ctx context.Context, args []string) error {
