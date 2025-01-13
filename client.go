@@ -35,7 +35,8 @@ type client struct {
 	user     string
 	endpoint string
 	table    table.Model
-	updates  chan []pkg.RollResult
+	readCh   chan []pkg.RollResult
+	writeCh  chan []byte
 	done     chan struct{}
 	err      error
 }
@@ -125,7 +126,8 @@ func newClient(host, room, user string) (*client, error) {
 		user:     user,
 		table:    t,
 		endpoint: endpoint,
-		updates:  make(chan []pkg.RollResult),
+		readCh:   make(chan []pkg.RollResult, 1),
+		writeCh:  make(chan []byte, 1),
 		done:     make(chan struct{}),
 	}, nil
 }
@@ -155,8 +157,8 @@ func (c *client) Init() tea.Cmd {
 		return errorCmd(fmt.Errorf("unable to write server: %w", err))
 	}
 
-	go waitClose(conn, c.done)
-	go updateLoop(conn, c.updates)
+	go writeLoop(conn, c.done, c.writeCh)
+	go readLoop(conn, c.readCh)
 
 	return c.readUpdate()
 }
@@ -181,6 +183,14 @@ func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			c.done <- struct{}{}
 			return c, tea.Quit
+		case " ":
+			b, err := msgpack.Marshal(pkg.SpaceEvent{User: c.user})
+			if err != nil {
+				slog.Error("failed to marshal space event", "error", err)
+				return c, nil
+			}
+			c.writeCh <- b
+			return c, nil
 		}
 	case error:
 		slog.Error("exiting for error", "error", msg)
@@ -205,26 +215,36 @@ func (c *client) readUpdate() tea.Cmd {
 	slog.Debug("reading update")
 	return func() tea.Msg {
 		slog.Debug("reading from channel")
-		update := <-c.updates
+		update := <-c.readCh
 		slog.Debug("read from channel")
 		return update
 	}
 }
 
-func waitClose(conn *websocket.Conn, done <-chan struct{}) {
-	<-done
-	slog.Debug("closing connection")
-	err := conn.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		time.Now().Add(time.Second),
-	)
-	if err != nil {
-		slog.Error("close control message failed", "error", err)
+func writeLoop(conn *websocket.Conn, done <-chan struct{}, writeCh <-chan []byte) {
+	for {
+		select {
+		case <-done:
+			slog.Debug("closing connection")
+			err := conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				time.Now().Add(time.Second),
+			)
+			if err != nil {
+				slog.Error("close control message failed", "error", err)
+			}
+			return
+		case b := <-writeCh:
+			err := conn.WriteMessage(websocket.BinaryMessage, b)
+			if err != nil {
+				slog.Error("failed to write to server", "err", err)
+			}
+		}
 	}
 }
 
-func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
+func readLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 	slog.Debug("running update loop")
 	var currentVersion int
 	for {

@@ -87,6 +87,10 @@ type RollResult struct {
 	Result int    `msgpack:"result"`
 }
 
+type SpaceEvent struct {
+	User string `msgpack:"user"`
+}
+
 type Room struct {
 	mu           *sync.Mutex
 	userSessions map[string]userSession
@@ -120,7 +124,7 @@ func (r *Room) startUserSession(ctx context.Context, session userSession, conn *
 func (r *Room) userReadLoop(ctx context.Context, session userSession, conn *websocket.Conn) {
 	defer session.wg.Done()
 	for {
-		t, _, err := conn.ReadMessage()
+		t, b, err := conn.ReadMessage()
 		if closeErr, ok := err.(*websocket.CloseError); ok {
 			if closeErr.Code == websocket.CloseNormalClosure {
 				return
@@ -137,7 +141,13 @@ func (r *Room) userReadLoop(ctx context.Context, session userSession, conn *webs
 			return
 		case websocket.BinaryMessage:
 			slog.Info("binary message received")
-			// handle
+			var se SpaceEvent
+			err := msgpack.Unmarshal(b, &se)
+			if err != nil {
+				slog.Error("failed to read space event", "error", err)
+				return
+			}
+			slog.Info("recieved space event", "user", se.User)
 		}
 	}
 }
