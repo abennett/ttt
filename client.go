@@ -60,6 +60,7 @@ func connectLoop(wsUrl string) (*websocket.Conn, error) {
 			slog.Debug("redirecting", "location", wsUrl)
 			continue
 		}
+		defer resp.Body.Close()
 		return conn, nil
 	}
 
@@ -137,7 +138,7 @@ func errorCmd(err error) tea.Cmd {
 	}
 }
 
-func (c client) Init() tea.Cmd {
+func (c *client) Init() tea.Cmd {
 	slog.Debug("running Init")
 	conn, err := connectLoop(c.endpoint)
 	if err != nil {
@@ -194,7 +195,7 @@ func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return c, nil
 }
 
-func (c client) View() string {
+func (c *client) View() string {
 	slog.Debug("rerendering view")
 	if c.err != nil {
 		return fmt.Sprintln(c.err)
@@ -202,7 +203,7 @@ func (c client) View() string {
 	return baseStyle.Render(c.table.View()) + "\n"
 }
 
-func (c client) readUpdate() tea.Cmd {
+func (c *client) readUpdate() tea.Cmd {
 	slog.Debug("reading update")
 	return func() tea.Msg {
 		slog.Debug("reading from channel")
@@ -253,9 +254,6 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 			rolls[idx] = rr
 			idx++
 		}
-		slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
-			return cmp.Compare(b.Result, a.Result)
-		})
 		slog.Debug("pushing rolls on channel")
 		updates <- rolls
 		currentVersion = room.Version

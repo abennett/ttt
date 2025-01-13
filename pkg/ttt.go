@@ -124,7 +124,7 @@ func (r *Room) userReadLoop(ctx context.Context, session userSession, conn *webs
 		switch t {
 		case websocket.CloseMessage:
 			slog.Info("close message received")
-			// do something
+			return
 		case websocket.BinaryMessage:
 			slog.Info("binary message received")
 			// handle
@@ -200,7 +200,6 @@ func (r *Room) RunSession(ctx context.Context, conn *websocket.Conn) {
 
 	session.wg.Wait()
 	slog.Info("closing session", "user", name)
-	return
 }
 
 func (r *Room) Roll(user string) error {

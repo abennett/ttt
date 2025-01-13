@@ -1,6 +1,6 @@
 module github.com/abennett/ttt
 
-go 1.21.0
+go 1.22
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0

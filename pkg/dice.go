@@ -4,11 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+var diceRegex = regexp.MustCompile(`(\d+)d(\d+)(\+\d+|\-\d+)?`)
 
 type DiceRoll struct {
 	Count     int
@@ -20,8 +22,7 @@ func ParseDiceRoll(diceRoll string) (DiceRoll, error) {
 	// <int>d<int>[+|-<int>]
 	// (\d+)d(\d+)???
 	var d DiceRoll
-	r := regexp.MustCompile(`(\d+)d(\d+)(\+\d+|\-\d+)?`)
-	matches := r.FindStringSubmatch(diceRoll)
+	matches := diceRegex.FindStringSubmatch(diceRoll)
 	if len(matches) < 3 {
 		return d, errors.New("string does not match expression")
 	}
@@ -61,7 +62,7 @@ func (dr DiceRoll) String() string {
 func (dr DiceRoll) Roll() int {
 	var result int
 	for x := 0; x < dr.Count; x++ {
-		result += rand.Intn(dr.DiceSides) + 1
+		result += rand.IntN(dr.DiceSides) + 1
 	}
 	return result + dr.Modifier
 }
