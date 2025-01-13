@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"slices"
 	"strconv"
 	"time"
 
