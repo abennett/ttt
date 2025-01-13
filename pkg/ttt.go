@@ -159,7 +159,7 @@ EXIT:
 		case <-ctx.Done():
 			break EXIT
 		case b := <-session.writeCh:
-			slog.Info("writing message", "user", session.name)
+			slog.Debug("writing message", "user", session.name)
 			err := conn.WriteMessage(websocket.BinaryMessage, b)
 			if err != nil {
 				slog.Error(err.Error())
@@ -238,7 +238,7 @@ func (r *Room) Update(update any) error {
 	}
 
 	for _, us := range r.userSessions {
-		slog.Info("pushing update", "user", us.name, "version", r.Version)
+		slog.Debug("pushing update", "user", us.name, "version", r.Version)
 		us.writeCh <- b
 	}
 	return nil
@@ -252,7 +252,7 @@ func (r *Room) toState() RoomState {
 		i++
 	}
 	slices.SortFunc(rolls, func(a, b RollResult) int {
-		return cmp.Compare(a.Result, b.Result)
+		return cmp.Compare(b.Result, a.Result)
 	})
 	return RoomState{
 		Version: r.Version,
