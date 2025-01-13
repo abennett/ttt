@@ -2,7 +2,6 @@ package pkg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 const (
@@ -60,15 +60,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	var rollRequest RollRequest
-	err = conn.ReadJSON(&rollRequest)
-	if err != nil {
-		slog.Error(err.Error())
-		return
-	}
-	slog.Info("message received", "message", rollRequest)
-	<-room.NewSession(r.Context(), rollRequest.User, conn)
-	slog.Info("session ended", "user", rollRequest.User)
+
+	// Keep connection alive
+	room.RunSession(r.Context(), conn)
 
 	room.mu.Lock()
 	if len(room.userSessions) == 0 {
@@ -80,71 +74,133 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	room.mu.Unlock()
 }
 
-type Room struct {
-	mu           sync.Mutex
-	userSessions map[string]userSession
-
-	Version int                   `json:"version"`
-	Name    string                `json:"name"`
-	Dice    string                `json:"required_roll"`
-	Rolls   map[string]RollResult `json:"rolls"`
+type RollRequest struct {
+	User string `msgpack:"user"`
+	Roll string `msgpack:"roll"`
 }
 
-func (r *Room) NewSession(ctx context.Context, name string, conn *websocket.Conn) <-chan struct{} {
-	doneCh := make(chan struct{}, 1)
+type RollResult struct {
+	User   string `msgpack:"user"`
+	Result int    `msgpack:"result"`
+}
+
+type Room struct {
+	mu           *sync.Mutex
+	userSessions map[string]userSession
+
+	Version int                   `msgpack:"version"`
+	Name    string                `msgpack:"name"`
+	Dice    string                `msgpack:"required_roll"`
+	Rolls   map[string]RollResult `msgpack:"rolls"`
+}
+
+type userSession struct {
+	name    string
+	writeCh chan []byte
+	wg      *sync.WaitGroup
+}
+
+func (r *Room) startUserSession(ctx context.Context, session userSession, conn *websocket.Conn) {
+	// Add to the waitGroup outside of goroutines here to avoid race condition on Add
+	session.wg.Add(2)
+	go r.userReadLoop(ctx, session, conn)
+	go r.userWriteLoop(ctx, session, conn)
+}
+
+func (r *Room) userReadLoop(ctx context.Context, session userSession, conn *websocket.Conn) {
+	defer session.wg.Done()
+	for {
+		t, _, err := conn.ReadMessage()
+		if closeErr, ok := err.(*websocket.CloseError); ok {
+			if closeErr.Code == websocket.CloseNormalClosure {
+				return
+			}
+		}
+		if err != nil {
+			slog.Error("failure in user read loop", "error", err)
+			return
+		}
+
+		switch t {
+		case websocket.CloseMessage:
+			slog.Info("close message received")
+			// do something
+		case websocket.BinaryMessage:
+			slog.Info("binary message received")
+			// handle
+		}
+	}
+}
+
+func (r *Room) userWriteLoop(ctx context.Context, session userSession, conn *websocket.Conn) {
+	ticker := time.NewTicker(PingInterval)
+	defer func() {
+		r.mu.Lock()
+		delete(r.userSessions, session.name)
+		r.mu.Unlock()
+
+		ticker.Stop()
+		<-ticker.C
+		session.wg.Done()
+	}()
+EXIT:
+	for {
+		select {
+		case <-ctx.Done():
+			break EXIT
+		case b := <-session.writeCh:
+			slog.Info("writing message", "user", session.name)
+			err := conn.WriteMessage(websocket.BinaryMessage, b)
+			if err != nil {
+				slog.Error(err.Error())
+				return
+			}
+		case <-ticker.C:
+			err := conn.WriteMessage(websocket.PingMessage, []byte{})
+			if err == websocket.ErrCloseSent {
+				return
+			}
+			if err != nil {
+				slog.Error("ping failed", "error", err)
+				return
+			}
+		}
+	}
+}
+
+func (r *Room) RunSession(ctx context.Context, conn *websocket.Conn) {
+	_, b, err := conn.ReadMessage()
+	if err != nil {
+		slog.Error("failed to read initial message", "error", err)
+		return
+	}
+	var req RollRequest
+	if err = msgpack.Unmarshal(b, &req); err != nil {
+		slog.Error("failed to parse initial message", "error", err, "payload", string(b))
+		return
+	}
+	name := req.User
 	writeCh := make(chan []byte, 1)
 	session := userSession{
-		name:    name,
+		wg:      new(sync.WaitGroup),
+		name:    req.User,
 		writeCh: writeCh,
 	}
 	r.mu.Lock()
 	r.userSessions[name] = session
 	r.mu.Unlock()
-	err := r.Roll(name)
+
+	r.startUserSession(ctx, session, conn)
+
+	err = r.Roll(session.name)
 	if err != nil {
 		slog.Error(err.Error())
-		return nil
+		return
 	}
 
-	go func() {
-		ticker := time.NewTicker(PingInterval)
-		defer func() {
-			doneCh <- struct{}{}
-
-			r.mu.Lock()
-			delete(r.userSessions, name)
-			r.mu.Unlock()
-
-			ticker.Stop()
-			<-ticker.C
-		}()
-	EXIT:
-		for {
-			select {
-			case <-ctx.Done():
-				break EXIT
-			case b := <-writeCh:
-				err := conn.WriteMessage(websocket.TextMessage, b)
-				if err != nil {
-					slog.Error(err.Error())
-					return
-				}
-			case <-ticker.C:
-				err := conn.WriteMessage(websocket.PingMessage, []byte{})
-				if err != nil {
-					slog.Error("ping failed", "error", err)
-					return
-				}
-			}
-		}
-	}()
-	return doneCh
-}
-
-func (r *Room) RemoveSession(name string) {
-	r.mu.Lock()
-	delete(r.userSessions, name)
-	r.mu.Unlock()
+	session.wg.Wait()
+	slog.Info("closing session", "user", name)
+	return
 }
 
 func (r *Room) Roll(user string) error {
@@ -154,36 +210,23 @@ func (r *Room) Roll(user string) error {
 	if err != nil {
 		return err
 	}
+	slog.Info("rolling", "user", user)
 	rollResult := RollResult{
 		User:   user,
 		Result: dice.Roll(),
 	}
 	r.Rolls[user] = rollResult
 	r.Version++
-	b, err := json.Marshal(r)
+	b, err := msgpack.Marshal(r)
 	if err != nil {
 		slog.Error("failed marshalling room", "error", err)
 		return err
 	}
 	for _, us := range r.userSessions {
+		slog.Info("pushing update", "user", us.name, "version", r.Version)
 		us.writeCh <- b
 	}
 	return nil
-}
-
-type userSession struct {
-	name    string
-	writeCh chan<- []byte
-}
-
-type RollRequest struct {
-	User string `json:"user"`
-	Roll string `json:"roll"`
-}
-
-type RollResult struct {
-	User   string `json:"user"`
-	Result int    `json:"result"`
 }
 
 func (s *Server) NewRoom(name string) (*Room, error) {
@@ -194,6 +237,7 @@ func (s *Server) NewRoom(name string) (*Room, error) {
 		return nil, ErrRoomExists
 	}
 	s.Rooms[name] = &Room{
+		mu:           new(sync.Mutex),
 		userSessions: make(map[string]userSession),
 		Version:      0,
 		Dice:         "1d20",

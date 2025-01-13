@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/abennett/ttt/pkg"
 )
@@ -146,9 +147,13 @@ func (c client) Init() tea.Cmd {
 	req := pkg.RollRequest{
 		User: c.user,
 	}
-	err = conn.WriteJSON(req)
+	b, err := msgpack.Marshal(req)
 	if err != nil {
-		return errorCmd(fmt.Errorf("unable to write json: %w", err))
+		return errorCmd(fmt.Errorf("failed to marshal: %w", err))
+	}
+	err = conn.WriteMessage(websocket.BinaryMessage, b)
+	if err != nil {
+		return errorCmd(fmt.Errorf("unable to write server: %w", err))
 	}
 
 	go waitClose(conn, c.done)
@@ -166,11 +171,10 @@ func resultsToRows(rrs []pkg.RollResult) []table.Row {
 }
 
 func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	slog.Debug("updating model", "msg", msg)
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
 		slog.Debug("roll result")
-		c.table.SetHeight(len(msg))
+		c.table.SetHeight(len(msg) + 1)
 		c.table.SetRows(resultsToRows(msg))
 		return c, c.readUpdate()
 	case tea.KeyMsg:
@@ -183,6 +187,8 @@ func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slog.Error("exiting for error", "error", msg)
 		c.err = msg
 		return c, tea.Quit
+	default:
+		slog.Debug("unsupported message", "msg", msg)
 	}
 	slog.Debug("no update")
 	return c, nil
@@ -223,17 +229,23 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 	slog.Debug("running update loop")
 	var currentVersion int
 	for {
-		var room pkg.Room
-		err := conn.ReadJSON(&room)
+		_, b, err := conn.ReadMessage()
 		if err != nil {
 			slog.Error(err.Error())
 			return
 		}
-		slog.Debug("message recieved", "version", room.Version)
+		var room pkg.Room
+		err = msgpack.Unmarshal(b, &room)
+		if err != nil {
+			slog.Error("failed parsing room", "error", err)
+			return
+		}
+		slog.Debug("message recieved", "room", room)
 		if currentVersion == room.Version {
 			slog.Debug("version hasn't changed, continuing")
 			continue
 		}
+
 		slog.Debug("new version")
 		rolls := make([]pkg.RollResult, len(room.Rolls))
 		var idx int
