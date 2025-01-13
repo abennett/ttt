@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"slices"
 	"strconv"
 	"time"
 
@@ -17,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
+	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/abennett/ttt/pkg"
 )
@@ -59,6 +58,7 @@ func connectLoop(wsUrl string) (*websocket.Conn, error) {
 			slog.Debug("redirecting", "location", wsUrl)
 			continue
 		}
+		defer resp.Body.Close()
 		return conn, nil
 	}
 
@@ -136,7 +136,7 @@ func errorCmd(err error) tea.Cmd {
 	}
 }
 
-func (c client) Init() tea.Cmd {
+func (c *client) Init() tea.Cmd {
 	slog.Debug("running Init")
 	conn, err := connectLoop(c.endpoint)
 	if err != nil {
@@ -146,9 +146,13 @@ func (c client) Init() tea.Cmd {
 	req := pkg.RollRequest{
 		User: c.user,
 	}
-	err = conn.WriteJSON(req)
+	b, err := msgpack.Marshal(req)
 	if err != nil {
-		return errorCmd(fmt.Errorf("unable to write json: %w", err))
+		return errorCmd(fmt.Errorf("failed to marshal: %w", err))
+	}
+	err = conn.WriteMessage(websocket.BinaryMessage, b)
+	if err != nil {
+		return errorCmd(fmt.Errorf("unable to write server: %w", err))
 	}
 
 	go waitClose(conn, c.done)
@@ -166,11 +170,10 @@ func resultsToRows(rrs []pkg.RollResult) []table.Row {
 }
 
 func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	slog.Debug("updating model", "msg", msg)
 	switch msg := msg.(type) {
 	case []pkg.RollResult:
 		slog.Debug("roll result")
-		c.table.SetHeight(len(msg))
+		c.table.SetHeight(len(msg) + 1)
 		c.table.SetRows(resultsToRows(msg))
 		return c, c.readUpdate()
 	case tea.KeyMsg:
@@ -183,12 +186,14 @@ func (c *client) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slog.Error("exiting for error", "error", msg)
 		c.err = msg
 		return c, tea.Quit
+	default:
+		slog.Debug("unsupported message", "msg", msg)
 	}
 	slog.Debug("no update")
 	return c, nil
 }
 
-func (c client) View() string {
+func (c *client) View() string {
 	slog.Debug("rerendering view")
 	if c.err != nil {
 		return fmt.Sprintln(c.err)
@@ -196,7 +201,7 @@ func (c client) View() string {
 	return baseStyle.Render(c.table.View()) + "\n"
 }
 
-func (c client) readUpdate() tea.Cmd {
+func (c *client) readUpdate() tea.Cmd {
 	slog.Debug("reading update")
 	return func() tea.Msg {
 		slog.Debug("reading from channel")
@@ -223,17 +228,23 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 	slog.Debug("running update loop")
 	var currentVersion int
 	for {
-		var room pkg.Room
-		err := conn.ReadJSON(&room)
+		_, b, err := conn.ReadMessage()
 		if err != nil {
 			slog.Error(err.Error())
 			return
 		}
-		slog.Debug("message recieved", "version", room.Version)
+		var room pkg.RoomState
+		err = msgpack.Unmarshal(b, &room)
+		if err != nil {
+			slog.Error("failed parsing room", "error", err)
+			return
+		}
+		slog.Debug("message recieved", "room", room)
 		if currentVersion == room.Version {
 			slog.Debug("version hasn't changed, continuing")
 			continue
 		}
+
 		slog.Debug("new version")
 		rolls := make([]pkg.RollResult, len(room.Rolls))
 		var idx int
@@ -241,9 +252,6 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 			rolls[idx] = rr
 			idx++
 		}
-		slices.SortFunc(rolls, func(a, b pkg.RollResult) int {
-			return cmp.Compare(b.Result, a.Result)
-		})
 		slog.Debug("pushing rolls on channel")
 		updates <- rolls
 		currentVersion = room.Version
