@@ -1,10 +1,13 @@
 package pkg
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -88,16 +91,23 @@ type Room struct {
 	mu           *sync.Mutex
 	userSessions map[string]userSession
 
-	Version int                   `msgpack:"version"`
-	Name    string                `msgpack:"name"`
-	Dice    string                `msgpack:"required_roll"`
-	Rolls   map[string]RollResult `msgpack:"rolls"`
+	Version int
+	Name    string
+	Dice    DiceRoll
+	Rolls   map[string]RollResult
+}
+
+type RoomState struct {
+	Version int          `msgpack:"version"`
+	Name    string       `msgpack:"name"`
+	Dice    string       `msgpack:"required_roll"`
+	Rolls   []RollResult `msgpack:"rolls"`
 }
 
 type userSession struct {
+	wg      *sync.WaitGroup
 	name    string
 	writeCh chan []byte
-	wg      *sync.WaitGroup
 }
 
 func (r *Room) startUserSession(ctx context.Context, session userSession, conn *websocket.Conn) {
@@ -192,7 +202,11 @@ func (r *Room) RunSession(ctx context.Context, conn *websocket.Conn) {
 
 	r.startUserSession(ctx, session, conn)
 
-	err = r.Roll(session.name)
+	roll := RollResult{
+		User:   name,
+		Result: r.Dice.Roll(),
+	}
+	err = r.Update(roll)
 	if err != nil {
 		slog.Error(err.Error())
 		return
@@ -202,30 +216,50 @@ func (r *Room) RunSession(ctx context.Context, conn *websocket.Conn) {
 	slog.Info("closing session", "user", name)
 }
 
-func (r *Room) Roll(user string) error {
+func (r *Room) Update(update any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	dice, err := ParseDiceRoll(r.Dice)
-	if err != nil {
+
+	switch u := update.(type) {
+	case RollResult:
+		r.Rolls[u.User] = u
+	default:
+		err := fmt.Errorf("unknown update type: %T", update)
+		slog.Error(err.Error())
 		return err
 	}
-	slog.Info("rolling", "user", user)
-	rollResult := RollResult{
-		User:   user,
-		Result: dice.Roll(),
-	}
-	r.Rolls[user] = rollResult
+
 	r.Version++
-	b, err := msgpack.Marshal(r)
+
+	b, err := msgpack.Marshal(r.toState())
 	if err != nil {
 		slog.Error("failed marshalling room", "error", err)
 		return err
 	}
+
 	for _, us := range r.userSessions {
 		slog.Info("pushing update", "user", us.name, "version", r.Version)
 		us.writeCh <- b
 	}
 	return nil
+}
+
+func (r *Room) toState() RoomState {
+	rolls := make([]RollResult, len(r.Rolls))
+	var i int
+	for _, roll := range r.Rolls {
+		rolls[i] = roll
+		i++
+	}
+	slices.SortFunc(rolls, func(a, b RollResult) int {
+		return cmp.Compare(a.Result, b.Result)
+	})
+	return RoomState{
+		Version: r.Version,
+		Name:    r.Name,
+		Dice:    r.Dice.String(),
+		Rolls:   rolls,
+	}
 }
 
 func (s *Server) NewRoom(name string) (*Room, error) {
@@ -239,9 +273,12 @@ func (s *Server) NewRoom(name string) (*Room, error) {
 		mu:           new(sync.Mutex),
 		userSessions: make(map[string]userSession),
 		Version:      0,
-		Dice:         "1d20",
-		Name:         name,
-		Rolls:        map[string]RollResult{},
+		Dice: DiceRoll{
+			Count:     1,
+			DiceSides: 20,
+		},
+		Name:  name,
+		Rolls: map[string]RollResult{},
 	}
 	return s.Rooms[name], nil
 }

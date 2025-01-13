@@ -233,7 +233,7 @@ func updateLoop(conn *websocket.Conn, updates chan<- []pkg.RollResult) {
 			slog.Error(err.Error())
 			return
 		}
-		var room pkg.Room
+		var room pkg.RoomState
 		err = msgpack.Unmarshal(b, &room)
 		if err != nil {
 			slog.Error("failed parsing room", "error", err)
