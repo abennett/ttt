@@ -4,14 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"math"
-	"math/rand"
 	"net/http"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +14,7 @@ import (
 )
 
 const (
-	PING_INTERVAL = time.Second
+	PingInterval = time.Second
 )
 
 var (
@@ -113,7 +107,7 @@ func (r *Room) NewSession(ctx context.Context, name string, conn *websocket.Conn
 	}
 
 	go func() {
-		ticker := time.NewTicker(PING_INTERVAL)
+		ticker := time.NewTicker(PingInterval)
 		defer func() {
 			doneCh <- struct{}{}
 
@@ -190,62 +184,6 @@ type RollRequest struct {
 type RollResult struct {
 	User   string `json:"user"`
 	Result int    `json:"result"`
-}
-
-type DiceRoll struct {
-	Count     int
-	DiceSides int
-	Modifier  int
-}
-
-func ParseDiceRoll(diceRoll string) (DiceRoll, error) {
-	// <int>d<int>[+|-<int>]
-	// (\d+)d(\d+)???
-	var d DiceRoll
-	r := regexp.MustCompile(`(\d+)d(\d+)(\+\d+|\-\d+)?`)
-	matches := r.FindStringSubmatch(diceRoll)
-	if len(matches) < 3 {
-		return d, errors.New("string does not match expression")
-	}
-	parsed := make([]int, 3)
-	for idx, s := range matches[1:] {
-		if s == "" {
-			parsed[idx] = 0
-			continue
-		}
-		v, err := strconv.Atoi(s)
-		if err != nil {
-			return d, err
-		}
-		parsed[idx] = v
-	}
-	return DiceRoll{
-		Count:     parsed[0],
-		DiceSides: parsed[1],
-		Modifier:  parsed[2],
-	}, nil
-}
-
-func (dr DiceRoll) String() string {
-	var builder strings.Builder
-	base := fmt.Sprintf("%dd%d", dr.Count, dr.DiceSides)
-	builder.WriteString(base)
-	if dr.Modifier > 0 {
-		builder.WriteString("+" + strconv.Itoa(dr.Modifier))
-	}
-	if dr.Modifier < 0 {
-		absolute := int(math.Abs(float64(dr.Modifier)))
-		builder.WriteString("-" + strconv.Itoa(absolute))
-	}
-	return builder.String()
-}
-
-func (dr DiceRoll) Roll() int {
-	var result int
-	for x := 0; x < dr.Count; x++ {
-		result += rand.Intn(dr.DiceSides) + 1
-	}
-	return result + dr.Modifier
 }
 
 func (s *Server) NewRoom(name string) (*Room, error) {
