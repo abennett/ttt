@@ -1,6 +1,6 @@
 module github.com/abennett/ttt
 
-go 1.21.0
+go 1.22
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0
@@ -9,6 +9,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/peterbourgon/ff/v3 v3.4.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 )
 
 require (
@@ -24,6 +25,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
