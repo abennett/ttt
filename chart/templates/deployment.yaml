@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ttt
+  name: ttt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ttt
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: ttt
+    spec:
+      containers:
+      - image: 068738303278.dkr.ecr.us-east-1.amazonaws.com/ttt:{{ .Values.imageVersion }}
+        name: ttt
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
