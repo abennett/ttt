@@ -14,6 +14,7 @@ import (
 	"github.com/peterbourgon/ff/v3/ffcli"
 
 	"github.com/abennett/ttt/pkg"
+	"github.com/abennett/ttt/pkg/server"
 )
 
 var (
@@ -47,7 +48,7 @@ func serve(ctx context.Context, args []string) error {
 	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
 	slog.SetDefault(slog.New(h))
 
-	server := pkg.NewServer()
+	server := server.NewServer()
 	r := chi.NewRouter()
 	r.Use(middleware.DefaultLogger)
 	r.Get("/{roomName}", server.ServeHTTP)
