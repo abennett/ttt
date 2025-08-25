@@ -150,7 +150,6 @@ func (r *Room) userWriteLoop(ctx context.Context, session userSession, conn *web
 		r.mu.Unlock()
 
 		ticker.Stop()
-		<-ticker.C
 		session.wg.Done()
 	}()
 EXIT:
