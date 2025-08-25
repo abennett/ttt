@@ -73,11 +73,10 @@ func (m *Message) UnmarshalMsgpack(b []byte) error {
 }
 
 type RoomState struct {
-	Version   int          `msgpack:"version"`
-	Name      string       `msgpack:"name"`
-	Dice      string       `msgpack:"required_roll"`
-	DoneIndex int          `msgpack:"done_index"`
-	Rolls     []RollResult `msgpack:"rolls"`
+	Version int          `msgpack:"version"`
+	Name    string       `msgpack:"name"`
+	Dice    string       `msgpack:"required_roll"`
+	Rolls   []RollResult `msgpack:"rolls"`
 }
 
 type RollRequest struct {
@@ -88,8 +87,9 @@ type RollRequest struct {
 type RollResult struct {
 	User   string `msgpack:"user"`
 	Result int    `msgpack:"result"`
+	IsDone bool   `msgpack:"is_done"`
 }
 
 type DoneRequest struct {
-	DoneIndex int `msgpack:"done_index"`
+	User string `msgpack:"user"`
 }

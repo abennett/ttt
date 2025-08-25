@@ -3,15 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/gorilla/websocket"
-	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/abennett/ttt/pkg/client"
 	"github.com/abennett/ttt/pkg/messages"
@@ -26,12 +24,12 @@ var baseStyle = lipgloss.NewStyle().
 var columns = []table.Column{
 	{Title: "User", Width: 10},
 	{Title: "Result", Width: 6},
+	{Title: "Done", Width: 6},
 }
 
 type ttt struct {
 	client *client.Client
 	table  table.Model
-	done   chan struct{}
 }
 
 func newTTT(c *client.Client) (*ttt, error) {
@@ -47,7 +45,6 @@ func newTTT(c *client.Client) (*ttt, error) {
 	return &ttt{
 		client: c,
 		table:  t,
-		done:   make(chan struct{}),
 	}, nil
 }
 
@@ -70,7 +67,11 @@ func (t *ttt) Init() tea.Cmd {
 func resultsToRows(rrs []messages.RollResult) []table.Row {
 	rows := make([]table.Row, len(rrs))
 	for idx, rr := range rrs {
-		rows[idx] = table.Row{rr.User, strconv.Itoa(rr.Result)}
+		if rr.IsDone {
+			rows[idx] = table.Row{rr.User, strconv.Itoa(rr.Result), "✅"}
+		} else {
+			rows[idx] = table.Row{rr.User, strconv.Itoa(rr.Result), ""}
+		}
 	}
 	return rows
 }
@@ -81,83 +82,55 @@ func (t *ttt) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		slog.Debug("roll result")
 		t.table.SetHeight(len(msg) + 1)
 		t.table.SetRows(resultsToRows(msg))
-		return t, t.readUpdate()
+		for _, rr := range msg {
+			if !rr.IsDone {
+				return t, func() tea.Msg {
+					return t.client.ReadUpdate()
+				}
+			}
+		}
+		return t, tea.Quit
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
-			c.done <- struct{}{}
-			return c, tea.Quit
+			err := t.client.Close()
+			if err != nil {
+				slog.Error("failed to close client", "error", err)
+			}
+			return t, tea.Quit
 
 		// Attempt to update done index
 		case " ":
-			doneReq := messages.DoneRequest{DoneIndex: 0}
-			m := messages.Message{
-				Type:    messages.DoneRequestType,
-				Version: "1",
-				Payload: doneReq,
-			}
-			b, err := msgpack.Marshal(m)
-			if err != nil {
-				panic(err)
-			}
-			err = c.conn.WriteMessage(websocket.BinaryMessage, b)
+			err := t.client.SubmitDone()
 			if err != nil {
 				panic(err)
 			}
 		}
 	case error:
 		slog.Error("exiting for error", "error", msg)
-		c.err = msg
-		return c, tea.Quit
+		return t, tea.Quit
 	default:
 		slog.Debug("unsupported message", "msg", msg)
 	}
 	slog.Debug("no update")
-	return c, nil
+	return t, nil
 }
 
-func (c *client) View() string {
+func (t *ttt) View() string {
 	slog.Debug("rerendering view")
-	if c.err != nil {
-		return fmt.Sprintln(c.err)
-	}
-	return baseStyle.Render(c.table.View()) + "\n"
+	return baseStyle.Render(t.table.View()) + "\n"
 }
 
-func (c *client) readUpdate() tea.Cmd {
-	slog.Debug("reading update")
-	return func() tea.Msg {
-		slog.Debug("reading from channel")
-		msg := <-c.messages
-		slog.Debug("read from channel")
-		switch payload := msg.Payload.(type) {
-		case messages.RoomState:
-			if payload.Version == c.roomVersion {
-				slog.Debug("version hasn't changed, continuing")
-			}
-
-			slog.Debug("new version")
-			rolls := make([]messages.RollResult, len(payload.Rolls))
-			for idx, rr := range payload.Rolls {
-				rolls[idx] = rr
-			}
-			slog.Debug("pushing rolls on channel")
-			c.roomVersion = payload.Version
-			return payload.Rolls
-		case messages.DoneRequest:
-			c.doneIndex = payload.DoneIndex
-		default:
-			panic(fmt.Sprintf("unexpected messages.Type: %#v", msg.Type))
-		}
-		return msg
-	}
-}
-
-func rollRemote(ctx context.Context, args []string) error {
-	c, err := newClient(args[0], args[1], args[2])
+func rollRemote(_ context.Context, args []string) error {
+	c, err := client.New(args[0], args[1], args[2], io.Discard)
 	if err != nil {
 		return err
 	}
-	_, err = tea.NewProgram(c).Run()
+	ttt, err := newTTT(c)
+	if err != nil {
+		return err
+	}
+
+	_, err = tea.NewProgram(ttt).Run()
 	return err
 }

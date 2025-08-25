@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -18,15 +19,14 @@ import (
 var ErrTooManyRedirects = errors.New("too many redirects")
 
 type Client struct {
+	mu   *sync.Mutex
 	user string
 
 	conn     *websocket.Conn
 	logger   *slog.Logger
 	messages chan messages.Message
-	done     chan struct{}
 
-	Room      messages.RoomState
-	doneIndex int
+	Room messages.RoomState
 }
 
 func connectLoop(wsUrl string) (*websocket.Conn, error) {
@@ -82,7 +82,7 @@ func setupLogger(user string, logWriter io.Writer) *slog.Logger {
 }
 
 func New(host, room, user string, logWriter io.Writer) (*Client, error) {
-	logger := setupLogger(user, os.Stderr)
+	logger := setupLogger(user, logWriter)
 
 	endpoint, err := hostUrl(host, room)
 	if err != nil {
@@ -96,6 +96,7 @@ func New(host, room, user string, logWriter io.Writer) (*Client, error) {
 	}
 
 	return &Client{
+		mu:       new(sync.Mutex),
 		user:     user,
 		logger:   logger,
 		conn:     conn,
@@ -103,7 +104,6 @@ func New(host, room, user string, logWriter io.Writer) (*Client, error) {
 		Room: messages.RoomState{
 			Rolls: []messages.RollResult{},
 		},
-		done: make(chan struct{}),
 	}, nil
 }
 
@@ -126,8 +126,27 @@ func (c *Client) Init() error {
 		return fmt.Errorf("unable to write server: %w", err)
 	}
 
-	go waitClose(c.conn, c.done)
 	go c.updateLoop(c.messages)
+	return nil
+}
+
+func (c *Client) SubmitDone() error {
+	doneReq := messages.DoneRequest{
+		User: c.user,
+	}
+	m := messages.Message{
+		Type:    messages.DoneRequestType,
+		Version: "1",
+		Payload: doneReq,
+	}
+	b, err := msgpack.Marshal(m)
+	if err != nil {
+		return err
+	}
+	err = c.conn.WriteMessage(websocket.BinaryMessage, b)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -149,24 +168,24 @@ func (c *Client) ReadUpdate() any {
 		c.Room = payload
 		return payload.Rolls
 	case messages.DoneRequest:
-		c.doneIndex = payload.DoneIndex
+		panic("not implemented")
 	default:
 		panic(fmt.Sprintf("unexpected messages.Type: %#v", msg.Type))
 	}
-	return msg
 }
 
-func waitClose(conn *websocket.Conn, done <-chan struct{}) {
-	<-done
+func (c *Client) Close() error {
 	slog.Debug("closing connection")
-	err := conn.WriteControl(
+	err := c.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 		time.Now().Add(time.Second),
 	)
 	if err != nil {
 		slog.Error("close control message failed", "error", err)
+		return fmt.Errorf("close control message failed: %w", err)
 	}
+	return nil
 }
 
 func (c *Client) updateLoop(updates chan<- messages.Message) {
@@ -191,7 +210,9 @@ func (c *Client) updateLoop(updates chan<- messages.Message) {
 		switch payload := msg.Payload.(type) {
 		case messages.RoomState:
 			c.logger.Debug("new room version", "version", payload.Version)
+			c.mu.Lock()
 			c.Room = payload
+			c.mu.Unlock()
 		default:
 			panic(fmt.Sprintf("support not implemented for %T", payload))
 		}

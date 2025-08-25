@@ -21,13 +21,13 @@ type Server struct {
 	rw       *sync.RWMutex
 	upgrader websocket.Upgrader
 
-	Rooms map[string]*Room
+	rooms map[string]*Room
 }
 
 func NewServer() *Server {
 	return &Server{
 		rw:    &sync.RWMutex{},
-		Rooms: map[string]*Room{},
+		rooms: map[string]*Room{},
 	}
 }
 
@@ -39,7 +39,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("serving request", "roomName", roomName)
 	var err error
-	room, ok := s.Rooms[roomName]
+	room, ok := s.rooms[roomName]
 	if !ok {
 		room, err = s.NewRoom(roomName)
 		if err != nil {
@@ -61,9 +61,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	room.mu.Lock()
 	if len(room.userSessions) == 0 {
-		s.rw.Lock()
-		delete(s.Rooms, roomName)
-		s.rw.Unlock()
+		s.deleteRoom(roomName)
 		slog.Info("closed room", "room", roomName)
 	}
 	room.mu.Unlock()
@@ -72,11 +70,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) NewRoom(name string) (*Room, error) {
 	s.rw.Lock()
 	defer s.rw.Unlock()
-	_, ok := s.Rooms[name]
+	_, ok := s.rooms[name]
 	if ok {
 		return nil, ErrRoomExists
 	}
-	s.Rooms[name] = &Room{
+	s.rooms[name] = &Room{
 		mu:           new(sync.Mutex),
 		logger:       slog.With("room", name),
 		userSessions: make(map[string]userSession),
@@ -86,17 +84,34 @@ func (s *Server) NewRoom(name string) (*Room, error) {
 			DiceSides: 20,
 		},
 		Name:  name,
-		Rolls: map[string]messages.RollResult{},
+		Rolls: map[string]*messages.RollResult{},
 	}
-	return s.Rooms[name], nil
+	return s.rooms[name], nil
+}
+
+func (s *Server) GetRooms() map[string]Room {
+	s.rw.RLock()
+	defer s.rw.RUnlock()
+
+	rooms := make(map[string]Room, len(s.rooms))
+	for k, v := range s.rooms {
+		rooms[k] = *v
+	}
+	return rooms
 }
 
 func (s *Server) GetRoom(roomName string) (*Room, error) {
 	s.rw.RLock()
 	defer s.rw.RUnlock()
-	room, ok := s.Rooms[roomName]
+	room, ok := s.rooms[roomName]
 	if !ok {
 		return room, ErrRoomNotExists
 	}
 	return room, nil
+}
+
+func (s *Server) deleteRoom(roomName string) {
+	s.rw.Lock()
+	delete(s.rooms, roomName)
+	s.rw.Unlock()
 }

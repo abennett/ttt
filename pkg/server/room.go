@@ -35,7 +35,7 @@ type Room struct {
 	Version int
 	Name    string
 	Dice    pkg.DiceRoll
-	Rolls   map[string]messages.RollResult
+	Rolls   map[string]*messages.RollResult
 }
 
 func (r *Room) RunSession(ctx context.Context, conn *websocket.Conn) {
@@ -109,7 +109,7 @@ func (r *Room) userReadLoop(cancel func(), session userSession, conn *websocket.
 	defer session.logger.Debug("closing read loop")
 
 	for {
-		t, _, err := conn.ReadMessage()
+		t, b, err := conn.ReadMessage()
 		if closeErr, ok := err.(*websocket.CloseError); ok {
 			if closeErr.Code == websocket.CloseNormalClosure {
 				session.logger.Info("close message received")
@@ -127,7 +127,16 @@ func (r *Room) userReadLoop(cancel func(), session userSession, conn *websocket.
 			return
 		case websocket.BinaryMessage:
 			session.logger.Info("binary message received")
-			// handle
+			var msg messages.Message
+			err := msgpack.Unmarshal(b, &msg)
+			if err != nil {
+				r.logger.Error("failed handling binary message", "error", err)
+				return
+			}
+			err = r.Update(msg.Payload)
+			if err != nil {
+				r.logger.Error("failed updating server", "error", err)
+			}
 		}
 	}
 }
@@ -185,8 +194,15 @@ func (r *Room) Update(update any) error {
 
 	switch u := update.(type) {
 	case messages.RollResult:
-		r.Rolls[u.User] = u
+		r.Rolls[u.User] = &u
 		r.logger.Debug("added roll", "active_sessions", len(r.userSessions), "user", u.User)
+	case messages.DoneRequest:
+		_, ok := r.Rolls[u.User]
+		if !ok {
+			return fmt.Errorf("user %q does not exist", u.User)
+		}
+		r.Rolls[u.User].IsDone = true
+		r.logger.Debug("user is done", "user", u.User)
 	default:
 		err := fmt.Errorf("unknown update type: %T", update)
 		r.logger.Error(err.Error())
@@ -217,7 +233,7 @@ func (r *Room) ToState() messages.RoomState {
 	rolls := make([]messages.RollResult, len(r.Rolls))
 	var i int
 	for _, roll := range r.Rolls {
-		rolls[i] = roll
+		rolls[i] = *roll
 		i++
 	}
 	slices.SortFunc(rolls, func(a, b messages.RollResult) int {
