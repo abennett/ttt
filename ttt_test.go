@@ -37,7 +37,7 @@ func TestSingleClient(t *testing.T) {
 
 	isDone := roomState.Rolls["tester"].IsDone
 	must.False(t, isDone)
-	must.NoError(t, client.SubmitDone())
+	must.NoError(t, client.ToggleDone())
 	time.Sleep(time.Second)
 	rooms = srv.GetRooms()
 	roomState = rooms["test1"]

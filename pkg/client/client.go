@@ -130,7 +130,7 @@ func (c *Client) Init() error {
 	return nil
 }
 
-func (c *Client) SubmitDone() error {
+func (c *Client) ToggleDone() error {
 	doneReq := messages.DoneRequest{
 		User: c.user,
 	}

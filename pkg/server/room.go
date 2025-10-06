@@ -197,11 +197,11 @@ func (r *Room) Update(update any) error {
 		r.Rolls[u.User] = &u
 		r.logger.Debug("added roll", "active_sessions", len(r.userSessions), "user", u.User)
 	case messages.DoneRequest:
-		_, ok := r.Rolls[u.User]
+		user, ok := r.Rolls[u.User]
 		if !ok {
 			return fmt.Errorf("user %q does not exist", u.User)
 		}
-		r.Rolls[u.User].IsDone = true
+		user.IsDone = !user.IsDone
 		r.logger.Debug("user is done", "user", u.User)
 	default:
 		err := fmt.Errorf("unknown update type: %T", update)

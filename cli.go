@@ -101,7 +101,7 @@ func (t *ttt) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Attempt to update done index
 		case " ":
-			err := t.client.SubmitDone()
+			err := t.client.ToggleDone()
 			if err != nil {
 				panic(err)
 			}
