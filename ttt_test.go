@@ -35,14 +35,17 @@ func TestSingleClient(t *testing.T) {
 	must.Eq(t, roomState.Version, client.Room.Version)
 	t.Log(roomState)
 
-	isDone := roomState.Rolls["tester"].IsDone
-	must.False(t, isDone)
+	must.MapContainsKey(t, roomState.Rolls, "tester")
+	tester := roomState.Rolls["tester"]
+	must.False(t, tester.IsDone)
 	must.NoError(t, client.ToggleDone())
 	time.Sleep(time.Second)
 	rooms = srv.GetRooms()
 	roomState = rooms["test1"]
-	isDone = roomState.Rolls["tester"].IsDone
-	must.True(t, isDone)
+	must.MapContainsKey(t, roomState.Rolls, "tester")
+	tester = roomState.Rolls["tester"]
+	must.True(t, tester.IsDone)
+	must.EqOp(t, 0, tester.ID)
 
 	err = client.Close()
 	must.NoError(t, err)
@@ -75,4 +78,11 @@ func TestMultipleClients(t *testing.T) {
 	must.Wait(t, wait.InitialSuccess(wait.BoolFunc(func() bool {
 		return client2.Room.Version == 2
 	})))
+
+	rooms := srv.GetRooms()
+	roomState := rooms["test1"]
+	tester1 := roomState.Rolls["tester1"]
+	must.Eq(t, 0, tester1.ID)
+	tester2 := roomState.Rolls["tester2"]
+	must.Eq(t, 1, tester2.ID)
 }

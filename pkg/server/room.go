@@ -31,6 +31,7 @@ type Room struct {
 	mu           *sync.Mutex
 	logger       *slog.Logger
 	userSessions map[string]userSession
+	userCounter  uint32
 
 	Version int
 	Name    string
@@ -194,6 +195,11 @@ func (r *Room) Update(update any) error {
 
 	switch u := update.(type) {
 	case messages.RollResult:
+		_, ok := r.Rolls[u.User]
+		if !ok {
+			u.ID = r.userCounter
+			r.userCounter++
+		}
 		r.Rolls[u.User] = &u
 		r.logger.Debug("added roll", "active_sessions", len(r.userSessions), "user", u.User)
 	case messages.DoneRequest:
@@ -236,9 +242,21 @@ func (r *Room) ToState() messages.RoomState {
 		rolls[i] = *roll
 		i++
 	}
+
 	slices.SortFunc(rolls, func(a, b messages.RollResult) int {
-		return cmp.Compare(b.Result, a.Result)
+		if a.IsDone && !b.IsDone {
+			return -1
+		}
+		if b.IsDone && !a.IsDone {
+			return 1
+		}
+		comparison := cmp.Compare(b.Result, a.Result)
+		if comparison == 0 {
+			return cmp.Compare(a.ID, b.ID)
+		}
+		return comparison
 	})
+
 	return messages.RoomState{
 		Version: r.Version,
 		Name:    r.Name,

@@ -86,6 +86,7 @@ type RollRequest struct {
 
 type RollResult struct {
 	User   string `msgpack:"user"`
+	ID     uint32 `msgpack:"id"`
 	Result int    `msgpack:"result"`
 	IsDone bool   `msgpack:"is_done"`
 }
