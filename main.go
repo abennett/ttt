@@ -22,7 +22,6 @@ var (
 	port     = serverFS.Int("port", 8080, "port number of server")
 
 	clientFS = flag.NewFlagSet("ttt roll", flag.ExitOnError)
-	logFile  = clientFS.String("logfile", "", "log to a file")
 )
 
 var (

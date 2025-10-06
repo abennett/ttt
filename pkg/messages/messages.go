@@ -22,7 +22,7 @@ const (
 )
 
 type Message struct {
-	_msgpack struct{} `msgpack:",as_array"`
+	_msgpack struct{} `msgpack:",as_array"` //nolint:unused
 	Type     Type     `msgpack:"type"`
 	Version  string   `msgpack:"version"`
 	Payload  any

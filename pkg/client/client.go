@@ -47,7 +47,7 @@ func connectLoop(wsUrl string) (*websocket.Conn, error) {
 			slog.Debug("redirecting", "location", wsUrl)
 			continue
 		}
-		defer resp.Body.Close()
+		defer resp.Body.Close() //nolint: errcheck
 		return conn, nil
 	}
 

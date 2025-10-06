@@ -48,12 +48,6 @@ func newTTT(c *client.Client) (*ttt, error) {
 	}, nil
 }
 
-func errorCmd(err error) tea.Cmd {
-	return func() tea.Msg {
-		return err
-	}
-}
-
 func (t *ttt) Init() tea.Cmd {
 	err := t.client.Init()
 	if err != nil {

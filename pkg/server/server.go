@@ -54,7 +54,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint: errcheck
 
 	// Keep connection alive
 	room.RunSession(r.Context(), conn)
