@@ -20,7 +20,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: latest
+          go-version: stable
 
       - name: Lint
         uses: golangci/golangci-lint-action@v4
