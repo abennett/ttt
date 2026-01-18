@@ -1,0 +1,40 @@
+name: Release Build
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: latest
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME=ttt
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=ttt.exe
+          fi
+          go build -v -o "dist/${BINARY_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}" -trimpath -ldflags="-w -s"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttt-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
