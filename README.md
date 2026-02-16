@@ -1,4 +1,4 @@
-# ttt - Turn Taking Tool
+# ttt - Team Table Top
 
 `ttt` is a real-time, multiplayer CLI tool designed to manage turn order and initiative for team meetings. Built with Go, it uses WebSockets for low-latency updates and to bring a bit more joy into your day.
 
